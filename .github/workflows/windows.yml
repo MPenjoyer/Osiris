@@ -116,8 +116,3 @@ jobs:
       with:
         name: Osiris Release Windows All
         path: ready/*
-
-    - name: build
-      run: cmake --build build --config ${{ matrix.configuration }}
-    - name: Run unit tests
-      run: cd build && ctest --output-on-failure --schedule-random -j $env:NUMBER_OF_PROCESSORS
