@@ -1,46 +1,122 @@
 name: Windows
 
+# Controls when the action will run. 
 on: [push, pull_request]
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+  # Build & upload dll files
+  windows-build:
+    name: Build (Windows)
+    runs-on: windows-2022
+    
+    # Build 3 dll files with with different intrinsics
     strategy:
       matrix:
-        os: [windows-2019, windows-2022]
-        toolset: [ClangCL, MSVC]
-        configuration: [Debug, Release]
-        exclude:
-          - os: windows-2019
-            toolset: ClangCL
+        intrinsic:
+          - "StreamingSIMDExtensions2"
+          - "AdvancedVectorExtensions"
+          - "AdvancedVectorExtensions2"
+          - "AdvancedVectorExtensions512"
+    
     steps:
-    - uses: actions/checkout@v2
-    - name: Add msbuild to PATH
-      uses: microsoft/setup-msbuild@v1.1
-    - name: Set toolset
-      if: matrix.toolset == 'ClangCL'
-      run: echo "toolset=/p:PlatformToolset=${{ matrix.toolset }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses: actions/checkout@v2.3.4
+      
+      # Add msbuild command to enviroment
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v1.0.2
+      
+      # Build Osiris
     - name: Build
-      shell: cmd
-      run: msbuild Osiris.sln /p:Platform=x86 /p:Configuration=${{ matrix.configuration }} ${{ env.toolset }}
+      run: msbuild Osiris.sln /p:Platform=x86 /p:Configuration=Release /p:Instruction_Set=${{ matrix.intrinsic }} /v:m
+      
+      # Move dll to separate folder
+    - name: Prepare to upload
+      run: |
+        New-Item -Path "${{ github.workspace }}\" -Name "ready" -ItemType "directory"
+        Copy-Item -Path ${{ github.workspace }}\Release\Osiris.dll -Destination ${{ github.workspace }}\ready\Osiris_${{ matrix.intrinsic }}.dll
+      
+      # Calculate SHA1 for dll
+    - name: SHA1
+      working-directory: ready
+      run: |
+        sha1sum Osiris_${{ matrix.intrinsic }}.dll > Osiris_${{ matrix.intrinsic }}.dll.sha1
+        (Get-Content -Path Osiris_${{ matrix.intrinsic }}.dll.sha1).Substring(0, 40)
+      
+      # Upload dll and sha1 sum to artifacts
+    - name: Upload (${{ matrix.intrinsic }})
+      uses: actions/upload-artifact@v2.2.3
+      with:
+        name: Osiris Release Windows (${{ matrix.intrinsic }})
+        path: ready/*
 
-  cmake:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-2019, windows-2022]
-        toolset: [ClangCL, MSVC]
-        configuration: [Debug, Release]
-        exclude:
-          - os: windows-2019
-            toolset: ClangCL
+
+  # Upload dll files and injector in one archive
+  windows-upload-all:
+    needs: windows-build
+    name: Upload All (Windows)
+    runs-on: windows-latest
+    
     steps:
-    - uses: actions/checkout@v2
-    - name: Set toolset
-      if: matrix.toolset == 'ClangCL'
-      run: echo "toolset=-T ${{ matrix.toolset }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-    - name: configure
-      run: cmake -D BUILD_TESTS=1 -A Win32 ${{ env.toolset }} -S . -B build
+    # Redownload earlier uploaded dll and sha1 files (SSE2)
+    - name: Download (StreamingSIMDExtensions2)
+      uses: actions/download-artifact@v2.0.9
+      with:
+        name: Osiris Release Windows (StreamingSIMDExtensions2)
+      
+    # Redownload earlier uploaded dll and sha1 files (AVX)
+    - name: Download (AdvancedVectorExtensions)
+      uses: actions/download-artifact@v2.0.9
+      with:
+        name: Osiris Release Windows (AdvancedVectorExtensions)
+      
+    # Redownload earlier uploaded dll and sha1 files (AVX2)
+    - name: Download (AdvancedVectorExtensions2)
+      uses: actions/download-artifact@v2.0.9
+      with:
+        name: Osiris Release Windows (AdvancedVectorExtensions2)
+      
+    # Redownload earlier uploaded dll and sha1 files (AVX512)
+    - name: Download (AdvancedVectorExtensions512)
+      uses: actions/download-artifact@v2.0.9
+      with:
+        name: Osiris Release Windows (AdvancedVectorExtensions512)
+      
+    # Prepare dll files to upload (just rename it and recalculate SHA1 to compare)
+    - name: Prepare to upload
+      run: |
+        mkdir ready
+        cp Osiris_StreamingSIMDExtensions2.dll ready/Osiris_SSE2.dll
+        cp Osiris_AdvancedVectorExtensions.dll ready/Osiris_AVX.dll
+        cp Osiris_AdvancedVectorExtensions2.dll ready/Osiris_AVX2.dll
+        cp Osiris_AdvancedVectorExtensions512.dll ready/Osiris_AVX512.dll
+        cd ready
+        sha1sum Osiris_SSE2.dll > Osiris_SSE2.dll.sha1
+        sha1sum Osiris_AVX.dll > Osiris_AVX.dll.sha1
+        sha1sum Osiris_AVX2.dll > Osiris_AVX2.dll.sha1
+        sha1sum Osiris_AVX512.dll > Osiris_AVX512.dll.sha1
+      
+    # Recheck SHA1 sum and compare it (why not?)
+    - name: Check SHA1 match
+      run: |
+        $exitCode=0
+        echo "Osiris_SSE2.dll SHA1 hash:"
+        If ((Get-Content -Path Osiris_StreamingSIMDExtensions2.dll.sha1).Substring(0, 40) -ne (Get-Content -Path ready\Osiris_SSE2.dll.sha1).Substring(0, 40)) { echo "NOT Equal"; $exitCode++ } Else { echo Equal; }
+        echo "Osiris_AVX.dll SHA1 hash:"
+        If ((Get-Content -Path Osiris_AdvancedVectorExtensions.dll.sha1).Substring(0, 40) -ne (Get-Content -Path ready\Osiris_AVX.dll.sha1).Substring(0, 40)) { echo "NOT Equal"; $exitCode++ } Else { echo Equal; }
+        echo "Osiris_AVX2.dll SHA1 hash:"
+        If ((Get-Content -Path Osiris_AdvancedVectorExtensions2.dll.sha1).Substring(0, 40) -ne (Get-Content -Path ready\Osiris_AVX2.dll.sha1).Substring(0, 40)) { echo "NOT Equal"; $exitCode++ } Else { echo Equal; }
+        echo "Osiris_AVX2.dll SHA1 hash:"
+        If ((Get-Content -Path Osiris_AdvancedVectorExtensions512.dll.sha1).Substring(0, 40) -ne (Get-Content -Path ready\Osiris_AVX512.dll.sha1).Substring(0, 40)) { echo "NOT Equal"; $exitCode++ } Else { echo Equal; }
+        exit $exitCode
+      
+    # Reupload it as one archive
+    - name: Upload All
+      uses: actions/upload-artifact@v2.2.3
+      with:
+        name: Osiris Release Windows All
+        path: ready/*
+
     - name: build
       run: cmake --build build --config ${{ matrix.configuration }}
     - name: Run unit tests
