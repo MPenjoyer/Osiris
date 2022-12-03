@@ -1,7 +1,7 @@
 name: Windows
 
 # Controls when the action will run. 
-on: [push, pull_request]
+on: [push, pull_request, create]
 
 jobs:
   # Build & upload dll files
